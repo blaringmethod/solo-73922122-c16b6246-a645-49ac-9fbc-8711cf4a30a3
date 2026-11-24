@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <h2>核对与供数 — 状态：
+    <span class="badge s-{{ status }}">
+      {% if status == 'IMPORTED' %}已导入·待核对
+      {% elif status == 'VERIFIED' %}已核对·待发布
+      {% elif status == 'SUPPLYING' %}供数中
+      {% elif status == 'PAUSED' %}已暂停·待重新核对{% endif %}
+    </span>
+  </h2>
+
+  <p>
+    甲卷总数（现用卷型）：<b>{{ total_a }}</b> 份　｜
+    实收甲卷：<b>{{ received if received is not none else '未登记' }}</b> 份
+    {% if received is not none %}
+      {% if total_a == received|int %}<span class="ok-text">✓ 相等</span>
+      {% else %}<span class="bad-text">✗ 不相等</span>{% endif %}
+    {% endif %}
+  </p>
+
+  <p>
+    现用分配复核：
+    {% if current.feasible %}<span class="ok-text">✓ 可证明整表（全部人数逐单元复现）</span>
+    {% else %}<span class="bad-text">✗ {{ current.reason }}</span>{% endif %}
+  </p>
+
+  <div style="display:flex; gap:10px; flex-wrap:wrap; margin:12px 0;">
+    <form method="post" action="{{ url_for('check_run') }}" class="inline">
+      <button type="submit" class="green">核对：求解并保存一组可行分配</button>
+    </form>
+    {% if status == 'VERIFIED' %}
+    <form method="post" action="{{ url_for('publish') }}" class="inline">
+      <button type="submit">发布供数</button>
+    </form>
+    {% elif status == 'SUPPLYING' %}
+    <span class="muted">供数生效中。更正卷型或实收份数后若现用分配失效，系统将立即暂停供数。</span>
+    {% elif status == 'PAUSED' %}
+    <form method="post" action="{{ url_for('resume') }}" class="inline">
+      <button type="submit" class="red">重新核对并恢复供数</button>
+    </form>
+    {% endif %}
+  </div>
+  <p class="muted">规则：只有找到能同时复现供数表全部人数、且甲卷总数等于实收份数的卷型分配，核对才算通过；发布只在核对通过后可用。</p>
+</div>
+
+<div class="card">
+  <h2>供数目标 vs 整表实测人数</h2>
+  <table>
+    <tr><th>题库题号</th><th>标准选项</th><th>目标人数</th><th>实测人数（现用卷型）</th><th>结果</th></tr>
+    {% for c in compare %}
+    <tr>
+      <td>{{ c.qid }}</td><td>{{ c.std_option }}</td><td>{{ c.target }}</td><td>{{ c.actual }}</td>
+      <td>{% if c.ok %}<span class="ok-text">✓ 一致</span>{% else %}<span class="bad-text">✗ 偏差 {{ c.actual - c.target }}</span>{% endif %}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" class="muted">尚未导入待供数 CSV</td></tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  <h2>卡卷型与一组可行分配（共 {{ total_cards }} 张）</h2>
+  <p class="muted">“原值”来自作答 CSV；缺失卡经核对后在“现用分配”列给出甲/乙。核对期间仍可直接在下方更正卷型码。</p>
+  <div class="scroll">
+  <table>
+    <tr><th>卡号</th><th>卷型码原值</th><th>现用分配</th><th>更正卷型码</th></tr>
+    {% for c in cards %}
+    <tr>
+      <td>{{ c.card_no }}</td>
+      <td>{% if c.is_known %}{{ c.raw_paper }}{% else %}<span class="muted">空（缺失）</span>{% endif %}</td>
+      <td>
+        {% if c.is_known %}{{ c.raw_paper }}（按原码）
+        {% elif c.assign_paper %}{{ c.assign_paper }}
+        {% else %}<span class="muted">待分配</span>{% endif %}
+      </td>
+      <td>
+        <form method="post" action="{{ url_for('correct_paper') }}" class="inline">
+          <input type="hidden" name="card_no" value="{{ c.card_no }}">
+          <select name="paper">
+            <option value="">置空(按缺失处理)</option>
+            <option value="A" {{ 'selected' if (c.raw_paper=='A' or c.assign_paper=='A') }}>甲 / A</option>
+            <option value="B" {{ 'selected' if (c.raw_paper=='B' or c.assign_paper=='B') }}>乙 / B</option>
+          </select>
+          <button type="submit" class="gray">更正</button>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="muted">尚未导入作答 CSV</td></tr>
+    {% endfor %}
+  </table>
+  </div>
+</div>
+
+<div class="card">
+  <h2>更正实收甲卷份数</h2>
+  <form method="post" action="{{ url_for('correct_received') }}" class="inline">
+    <input type="number" name="received_a" min="0" required value="{{ received if received is not none else '' }}">
+    <button type="submit" class="gray">更正份数并复核</button>
+  </form>
+  <p class="muted">若更正后现用分配仍能证明整表则继续供数；否则供数立即暂停，需重新核对找到符合最新资料的分配后恢复。保存失败时沿用已提交状态。</p>
+</div>
+{% endblock %}

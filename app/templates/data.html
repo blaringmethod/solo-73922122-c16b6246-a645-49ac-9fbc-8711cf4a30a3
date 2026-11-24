@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <h2>
+    {% if kind == 'raw' %}原始作答
+    {% elif kind == 'mapping' %}甲乙卷对照表
+    {% elif kind == 'mapped' %}换算结果（题库题号 / 标准选项）{% endif %}
+  </h2>
+  <div class="scroll">
+  <table>
+    <tr>{% for c in cols %}<th>{{ c }}</th>{% endfor %}</tr>
+    {% for r in rows %}
+    <tr>{% for k in r.keys() if k not in ('is_known',) %}
+      <td>
+        {% if k == 'is_known' %}{{ r[k] }}
+        {% elif k == 'paper' %}{{ '甲' if r[k]=='A' else '乙' }}
+        {% elif k == 'raw_paper' %}{{ r[k] if r['is_known'] else '空' }}
+        {% else %}{{ r[k] }}{% endif %}
+      </td>
+    {% endfor %}</tr>
+    {% else %}
+    <tr><td colspan="{{ cols|length }}" class="muted">暂无数据</td></tr>
+    {% endfor %}
+  </table>
+  </div>
+  <p class="muted">共 {{ rows|length }} 行。<a href="{{ url_for('index') }}">返回总览</a></p>
+</div>
+{% endblock %}

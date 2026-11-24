@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <h2>考试状态：
+    <span class="badge s-{{ status }}">
+      {% if status == 'IMPORTED' %}已导入·待核对
+      {% elif status == 'VERIFIED' %}已核对·待发布
+      {% elif status == 'SUPPLYING' %}供数中
+      {% elif status == 'PAUSED' %}已暂停·待重新核对{% endif %}
+    </span>
+  </h2>
+  <div class="grid">
+    <div class="stat">卡号总数<b>{{ stats.cards }}</b></div>
+    <div class="stat">卷型缺失卡<b>{{ stats.unknown }}</b></div>
+    <div class="stat">对照表条目<b>{{ stats.mappings }}</b></div>
+    <div class="stat">供数单元<b>{{ stats.supply_cells }}</b></div>
+    <div class="stat">已分配卡<b>{{ stats.assigned }}</b></div>
+    <div class="stat">实收甲卷(份)<b>{{ stats.received_a }}</b></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>1. 导入作答 CSV</h2>
+  <p class="muted">表头：<code>卡号,卷型码,题位,所选项</code>（卷型码可留空；同一张卡整表共用一个卷型）。重新导入会清空本场考试旧数据。</p>
+  <form method="post" action="{{ url_for('import_answers') }}" enctype="multipart/form-data">
+    <input type="file" name="answer_file" accept=".csv" required>
+    <button type="submit">导入作答</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>2. 导入甲乙卷对照表</h2>
+  <p class="muted">表头：<code>卷型码,题位,所选项,题号,标准选项</code>（卷型码支持 甲/乙、A/B）。导入后自动把题位与选项换算为题库题号与标准选项。</p>
+  <form method="post" action="{{ url_for('import_mapping') }}" enctype="multipart/form-data">
+    <input type="file" name="mapping_file" accept=".csv" accept-charset="utf-8">
+    <button type="submit">导入对照表</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>3. 登记实收甲卷份数</h2>
+  <form method="post" action="{{ url_for('received') }}" class="inline">
+    <input type="number" name="received_a" min="0" required placeholder="份数">
+    <button type="submit">登记 / 更正份数</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>4. 导入待供数 CSV</h2>
+  <p class="muted">表头：<code>题号,标准选项,人数</code>。核对时必须找到一组卷型分配，使整表逐单元复现这些人数，且甲卷总数等于实收份数，方可发布。</p>
+  <form method="post" action="{{ url_for('import_supply') }}" enctype="multipart/form-data">
+    <input type="file" name="supply_file" accept=".csv" required>
+    <button type="submit">导入待供数</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>操作记录</h2>
+  <table>
+    <tr><th>时间</th><th>事件</th><th>明细</th></tr>
+    {% for a in audits %}
+    <tr><td>{{ a.ts }}</td><td>{{ a.event }}</td><td>{{ a.detail }}</td></tr>
+    {% else %}
+    <tr><td colspan="3" class="muted">暂无记录</td></tr>
+    {% endfor %}
+  </table>
+  <p style="margin-top:14px"><a href="{{ url_for('check_page') }}">→ 前往核对与供数页</a></p>
+</div>
+{% endblock %}

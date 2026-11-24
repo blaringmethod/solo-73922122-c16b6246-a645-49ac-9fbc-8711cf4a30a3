@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>联考选项人数核对与供数</title>
+<style>
+  :root { --blue:#2456a6; --bg:#f4f6fa; --line:#d9deea; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: "PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+         background:var(--bg); color:#1d2433; }
+  header { background:var(--blue); color:#fff; padding:14px 28px; display:flex;
+           justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; }
+  header a { color:#dbe6ff; text-decoration:none; margin-left:18px; }
+  header a:hover { color:#fff; text-decoration:underline; }
+  main { max-width:1180px; margin:22px auto; padding:0 18px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px;
+          padding:18px 22px; margin-bottom:18px; }
+  h2 { margin:0 0 12px; font-size:18px; }
+  h3 { margin:16px 0 8px; font-size:15px; }
+  table { border-collapse:collapse; width:100%; font-size:13.5px; }
+  th, td { border:1px solid var(--line); padding:6px 10px; text-align:left; }
+  th { background:#eef2fa; }
+  .badge { display:inline-block; padding:3px 12px; border-radius:999px; font-size:13px; font-weight:600; }
+  .s-IMPORTED  { background:#fff3d6; color:#8a6116; }
+  .s-VERIFIED  { background:#dcf2e3; color:#1f7a3d; }
+  .s-SUPPLYING { background:#d8e9ff; color:#1b4f9e; }
+  .s-PAUSED    { background:#ffe0e0; color:#a52424; }
+  .flash { padding:10px 16px; border-radius:8px; margin-bottom:14px; font-size:14px; }
+  .flash.ok   { background:#dcf2e3; border:1px solid #9ed8b1; }
+  .flash.error{ background:#ffe0e0; border:1px solid #e5a3a3; }
+  .flash.warn { background:#fff3d6; border:1px solid #e3cf95; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; }
+  .stat { background:#f7f9fd; border:1px solid var(--line); border-radius:8px; padding:10px 14px; }
+  .stat b { display:block; font-size:20px; margin-top:4px; }
+  form.inline { display:inline; }
+  input[type=text], input[type=number], select { padding:6px 9px; border:1px solid var(--line);
+          border-radius:6px; font-size:13.5px; }
+  button { padding:7px 16px; border:0; border-radius:7px; background:var(--blue); color:#fff;
+           cursor:pointer; font-size:14px; }
+  button.gray { background:#6b7280; }
+  button.red  { background:#b43b3b; }
+  button.green{ background:#1f7a3d; }
+  button:disabled { background:#aab4c5; cursor:not-allowed; }
+  .muted { color:#6b7280; font-size:12.5px; }
+  .ok-text { color:#1f7a3d; font-weight:600; }
+  .bad-text { color:#a52424; font-weight:600; }
+  code { background:#eef2fa; padding:1px 5px; border-radius:4px; }
+  .scroll { max-height:420px; overflow:auto; }
+</style>
+</head>
+<body>
+<header>
+  <div><strong>联考选项人数核对与供数系统</strong></div>
+  <nav>
+    <a href="{{ url_for('index') }}">总览/导入</a>
+    <a href="{{ url_for('check_page') }}">核对与供数</a>
+    <a href="{{ url_for('data_view', kind='raw') }}">原始作答</a>
+    <a href="{{ url_for('data_view', kind='mapping') }}">对照表</a>
+    <a href="{{ url_for('data_view', kind='mapped') }}">换算结果</a>
+  </nav>
+</header>
+<main>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for cat, msg in messages %}
+      <div class="flash {{ cat }}">{{ msg }}</div>
+    {% endfor %}
+  {% endwith %}
+  {% block body %}{% endblock %}
+</main>
+</body>
+</html>
