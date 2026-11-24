@@ -41,7 +41,8 @@
     </form>
     {% endif %}
   </div>
-  <p class="muted">规则：只有找到能同时复现供数表全部人数、且甲卷总数等于实收份数的卷型分配，核对才算通过；发布只在核对通过后可用。</p>
+  <p class="muted">规则：只有找到能同时复现供数表全部人数、且甲卷总数等于实收份数的卷型分配，核对才算通过；发布只在核对通过后可用。
+  同一卡的两条作答按某卷型换算后落到同一题号（即使标准选项相同），该卷型即不可用于这张卡，核对时自动排除并继续寻找其它合法分配；不同卡各自落到同一题位属正常情况，可正常换算。</p>
 </div>
 
 <div class="card">
@@ -64,7 +65,7 @@
   <p class="muted">“原值”来自作答 CSV；缺失卡经核对后在“现用分配”列给出甲/乙。核对期间仍可直接在下方更正卷型码。</p>
   <div class="scroll">
   <table>
-    <tr><th>卡号</th><th>卷型码原值</th><th>现用分配</th><th>更正卷型码</th></tr>
+    <tr><th>卡号</th><th>卷型码原值</th><th>现用分配</th><th>甲卷可用性</th><th>乙卷可用性</th><th>更正卷型码</th></tr>
     {% for c in cards %}
     <tr>
       <td>{{ c.card_no }}</td>
@@ -74,6 +75,12 @@
         {% elif c.assign_paper %}{{ c.assign_paper }}
         {% else %}<span class="muted">待分配</span>{% endif %}
       </td>
+      {% set ia = availability[c.card_no]['A'] %}
+      {% set ib = availability[c.card_no]['B'] %}
+      <td>{% if ia is none %}<span class="ok-text">可用</span>
+        {% else %}<span class="bad-text" title="{{ ia[2] }}">不可用（{% if ia[0]=='collision' %}同卡同题号{% else %}无映射{% endif %}）</span>{% endif %}</td>
+      <td>{% if ib is none %}<span class="ok-text">可用</span>
+        {% else %}<span class="bad-text" title="{{ ib[2] }}">不可用（{% if ib[0]=='collision' %}同卡同题号{% else %}无映射{% endif %}）</span>{% endif %}</td>
       <td>
         <form method="post" action="{{ url_for('correct_paper') }}" class="inline">
           <input type="hidden" name="card_no" value="{{ c.card_no }}">
@@ -87,7 +94,7 @@
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="4" class="muted">尚未导入作答 CSV</td></tr>
+    <tr><td colspan="6" class="muted">尚未导入作答 CSV</td></tr>
     {% endfor %}
   </table>
   </div>

@@ -166,6 +166,7 @@ def check_page():
         total_a=total_a,
         received=received,
         total_cards=len(cards),
+        availability=services.paper_availability(conn),
     )
 
 
@@ -180,11 +181,14 @@ def _actual_counts(conn):
 
 @app.route("/check/run", methods=["POST"])
 def check_run():
-    result = services.save_assignment_and_verify(get_conn(), resume=False)
-    if result["feasible"]:
-        flash(f"核对通过：找到可行分配，甲卷 {result['total_a']} 份 = 实收 {result['received_a']} 份，全部人数逐单元复现", "ok")
-    else:
-        flash("核对未通过：" + result["reason"], "error")
+    try:
+        result = services.save_assignment_and_verify(get_conn(), resume=False)
+        if result["feasible"]:
+            flash(f"核对通过：找到可行分配，甲卷 {result['total_a']} 份 = 实收 {result['received_a']} 份，全部人数逐单元复现", "ok")
+        else:
+            flash("核对未通过：" + result["reason"], "error")
+    except ImportError_ as exc:
+        flash(f"核对保存失败（已保留已提交结果）：{exc}", "error")
     return redirect(url_for("check_page"))
 
 
@@ -200,11 +204,14 @@ def publish():
 
 @app.route("/resume", methods=["POST"])
 def resume():
-    result = services.save_assignment_and_verify(get_conn(), resume=True)
-    if result["feasible"]:
-        flash("已恢复供数：找到符合最新资料的可行分配", "ok")
-    else:
-        flash("无法恢复供数：" + result["reason"], "error")
+    try:
+        result = services.save_assignment_and_verify(get_conn(), resume=True)
+        if result["feasible"]:
+            flash("已恢复供数：找到符合最新资料的可行分配", "ok")
+        else:
+            flash("无法恢复供数：" + result["reason"], "error")
+    except ImportError_ as exc:
+        flash(f"恢复保存失败（已保留已提交结果）：{exc}", "error")
     return redirect(url_for("check_page"))
 
 

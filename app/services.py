@@ -74,7 +74,12 @@ def import_answer_csv(conn, data: bytes) -> dict:
 
 
 def import_mapping_csv(conn, data: bytes) -> dict:
-    """导入甲乙卷对照表：卷型码、题位、所选项、题号、标准选项。"""
+    """导入甲乙卷对照表：卷型码、题位、所选项、题号、标准选项。
+
+    新表落库前先整体预检：已识别卷型的卡若在新表下出现映射缺失或
+    “同卡两题位换算到同一题号”的冲突，直接拒绝并保留原对照表、换算明细
+    与供数状态（事务回滚），页面回显卡号与题号。
+    """
     rows = read_csv_rows(
         data, ["卷型码", "题位", "所选项", "题号", "标准选项"], "甲乙卷对照表"
     )
@@ -92,6 +97,16 @@ def import_mapping_csv(conn, data: bytes) -> dict:
             raise ImportError_(f"对照表存在重复映射：{paper} 卷 题位 {r['题位']} 选项 {r['所选项']}")
         seen.add(key)
         records.append((paper, r["题位"], r["所选项"], r["题号"], r["标准选项"]))
+
+    # 预检：仅针对已识别卷型的卡（缺码卡允许冲突——其当前推定卷型可在
+    # 求解时排除，供数中则按规则暂停，再重新核对恢复）
+    candidate = {(p, po, oo): (qid, so) for p, po, oo, qid, so in records}
+    blocked = _known_card_paper_issues(conn, candidate)
+    if blocked:
+        raise ImportError_(
+            "新对照表与已识别卷型的卡冲突，已保留原对照表、换算明细和供数状态："
+            + "；".join(_format_issue(*item) for item in blocked[:10])
+        )
 
     with conn:
         conn.execute("DELETE FROM mapping")
@@ -158,6 +173,50 @@ def _mapping_dict(conn) -> dict[tuple[str, str, str], tuple[str, str]]:
     }
 
 
+# 卡 × 卷型的两类问题：
+#   missing   某题位/选项在该卷型对照表中无映射
+#   collision 同一卡的两条（或以上）作答按该卷型换算后落到同一题号——
+#             即使标准选项相同，该卷型也不能用于这张卡
+def _card_paper_issue(conn, card: str, paper: str, m: dict) -> tuple[str, str, list] | None:
+    """检查单卡在指定卷型下是否可用；返回 (问题类型, 详情, 行) 或 None。"""
+    seen_qid: dict[str, list[tuple[str, str, tuple[str, str]]]] = {}
+    missing = []
+    for r in conn.execute(
+        "SELECT pos, option FROM answers_raw WHERE card_no=? ORDER BY pos", (card,)
+    ):
+        hit = m.get((paper, r["pos"], r["option"]))
+        if hit is None:
+            missing.append((r["pos"], r["option"]))
+            continue
+        seen_qid.setdefault(hit[0], []).append((r["pos"], r["option"], hit))
+    if missing:
+        return ("missing", paper, missing)
+    for qid, hits in seen_qid.items():
+        if len(hits) > 1:
+            return ("collision", paper, [(qid, hits)])
+    return None
+
+
+def _format_issue(card: str, issue: tuple[str, str, list]) -> str:
+    kind, paper, detail = issue
+    if kind == "collision":
+        qid, hits = detail[0]
+        pos_opts = "、".join(f"题位{p}/选项{o}" for p, o, _ in hits)
+        return f"卡 {card} 按{paper}卷换算后 {pos_opts} 落到同一题号 {qid}"
+    pos_opts = "、".join(f"题位{p}/选项{o}" for p, o in detail)
+    return f"卡 {card} 在{paper}卷下存在无映射作答（{pos_opts}）"
+
+
+def _known_card_paper_issues(conn, m: dict) -> list[tuple[str, tuple]]:
+    """所有已识别卷型卡按其原码换算的问题（换表预检用）。"""
+    out = []
+    for r in conn.execute("SELECT card_no, paper FROM cards WHERE is_known=1 ORDER BY card_no"):
+        issue = _card_paper_issue(conn, r["card_no"], r["paper"], m)
+        if issue is not None:
+            out.append((r["card_no"], issue))
+    return out
+
+
 def effective_paper(conn, card: str) -> str | None:
     row = conn.execute("SELECT paper, is_known FROM cards WHERE card_no=?", (card,)).fetchone()
     if row is None:
@@ -169,26 +228,40 @@ def effective_paper(conn, card: str) -> str | None:
 
 
 def recompute_mapped(conn) -> None:
-    """按当前卷型（含 assignment 中对缺失卡的分配）重算题库题号/标准选项。"""
+    """按当前卷型（含 assignment 中对缺失卡的分配）重算题库题号/标准选项。
+
+    已识别卷型的卡不允许出现映射缺失或同卡同题号冲突（此时属资料错误，
+    抛 ImportError_ 让整个事务回滚、沿用已提交结果）；缺码卡出现上述问题时
+    跳过该卡（其现用推定卷型已不合法），交由求解器换用另一卷型或由
+    _revalidate_after_change 暂停供数。
+    """
     m = _mapping_dict(conn)
     rows = conn.execute(
         "SELECT c.card_no, c.is_known, c.paper AS cpaper, a.paper AS apaper, r.pos, r.option "
         "FROM cards c JOIN answers_raw r ON r.card_no=c.card_no "
         "LEFT JOIN assignment a ON a.card_no=c.card_no ORDER BY c.card_no, r.pos"
     ).fetchall()
-    out = []
-    missing = []
+    by_card: dict[str, dict] = {}
     for r in rows:
-        paper = r["cpaper"] if r["is_known"] else r["apaper"]
+        by_card.setdefault(r["card_no"], r)
+    out = []
+    errors = []
+    for card, r in by_card.items():
+        is_known = r["is_known"]
+        paper = r["cpaper"] if is_known else r["apaper"]
         if paper is None:
             continue  # 缺失卷型且尚未分配，待求解后再算
-        hit = m.get((paper, r["pos"], r["option"]))
-        if hit is None:
-            missing.append(f"{paper}卷/题位{r['pos']}/选项{r['option']}（卡 {r['card_no']}）")
+        issue = _card_paper_issue(conn, card, paper, m)
+        if issue is not None:
+            if is_known:
+                errors.append(_format_issue(card, issue))
+            # 缺码卡：该推定卷型已不合法，跳过其换算明细，待重新核对
             continue
-        out.append((r["card_no"], hit[0], hit[1]))
-    if missing:
-        raise ImportError_("以下作答在对照表中找不到映射：" + "；".join(missing[:10]))
+        for rr in conn.execute("SELECT pos, option FROM answers_raw WHERE card_no=? ORDER BY pos", (card,)):
+            qid, std_opt = m[(paper, rr["pos"], rr["option"])]
+            out.append((card, qid, std_opt))
+    if errors:
+        raise ImportError_("；".join(errors[:10]))
     conn.execute("DELETE FROM answers_mapped")
     conn.executemany(
         "INSERT INTO answers_mapped(card_no, qid, std_option) VALUES(?,?,?)", out
@@ -197,14 +270,23 @@ def recompute_mapped(conn) -> None:
 
 # ---------------------------------------------------------------- 求解
 def _contrib_vector(conn, card: str, paper: str, m: dict) -> dict | None:
-    """单卡在某假定卷型下，对各 (题号,标准选项) 单元贡献的计数；映射缺失返回 None。"""
-    vec: dict[tuple[str, int], int] = defaultdict(int)
+    """单卡在某假定卷型下，对各 (题号,标准选项) 单元贡献的计数。
+
+    以下两种情况该卷型不能用于这张卡，返回 None：
+      - 映射缺失；
+      - 同卡两条作答按该卷型换算后落到同一题号（即使标准选项相同）。
+    """
+    vec: dict[tuple[str, str], int] = defaultdict(int)
+    seen_qids: set[str] = set()
     for r in conn.execute(
         "SELECT pos, option FROM answers_raw WHERE card_no=?", (card,)
     ):
         hit = m.get((paper, r["pos"], r["option"]))
         if hit is None:
             return None
+        if hit[0] in seen_qids:
+            return None  # 同卡同题号冲突，该卷型对本卡不可用
+        seen_qids.add(hit[0])
         vec[hit] += 1
     return dict(vec)
 
@@ -237,9 +319,12 @@ def find_feasible_assignment(conn) -> dict:
     for r in conn.execute("SELECT card_no, paper FROM cards WHERE is_known=1"):
         if r["paper"] == "A":
             known_a += 1
+        issue = _card_paper_issue(conn, r["card_no"], r["paper"], m)
+        if issue is not None:
+            return {"feasible": False, "reason": _format_issue(r["card_no"], issue)}
         vec = _contrib_vector(conn, r["card_no"], r["paper"], m)
         if vec is None:
-            return {"feasible": False, "reason": f"已知{r['paper']}卷卡 {r['card_no']} 存在对照表未覆盖的作答"}
+            return {"feasible": False, "reason": f"已知{r['paper']}卷卡 {r['card_no']} 存在对照表未覆盖的作答或同题号冲突"}
         for cell, n in vec.items():
             base[cell] += n
 
@@ -253,13 +338,27 @@ def find_feasible_assignment(conn) -> dict:
             return {"feasible": False, "reason": f"无缺失卷型卡，但甲卷总数 {known_a} ≠ 实收 {received_a}"}
         return _finalize(conn, {}, base, target, received_a, known_a)
 
-    # 每张缺失卡的两种贡献向量；某卷型映射缺失则该分支不可用
+    # 每张缺失卡的两种贡献向量；映射缺失或同卡同题号冲突的分支不可用，求解时排除
     card_vecs: dict[str, tuple[dict | None, dict | None]] = {}
+    card_blocked: dict[str, list[str]] = {}
     for card in unknown:
         va = _contrib_vector(conn, card, "A", m)
         vb = _contrib_vector(conn, card, "B", m)
+        blocked = []
+        if va is None:
+            blocked.append("A")
+        if vb is None:
+            blocked.append("B")
+        if blocked:
+            card_blocked[card] = blocked
         if va is None and vb is None:
-            return {"feasible": False, "reason": f"卡 {card} 的作答在甲、乙卷对照表里均无映射"}
+            detail = []
+            for paper in ("A", "B"):
+                issue = _card_paper_issue(conn, card, paper, m)
+                if issue is not None:
+                    detail.append(_format_issue(card, issue))
+            return {"feasible": False,
+                    "reason": "卡 {} 在甲、乙卷下均不可用：{}".format(card, "；".join(detail) or "映射均缺失")}
         card_vecs[card] = (va, vb)
 
     # 同分组合并：(vecA, vecB) 完全相同的卡一起决定 k 个甲
@@ -382,7 +481,10 @@ def find_feasible_assignment(conn) -> dict:
             assignment[card] = "A"
         for card in g["cards"][k:]:
             assignment[card] = "B"
-    return _finalize(conn, assignment, base, target, received_a, known_a, save=False)
+    result = _finalize(conn, assignment, base, target, received_a, known_a, save=False)
+    if result["feasible"]:
+        result["blocked_branches"] = card_blocked
+    return result
 
 
 def _freeze(vec: dict | None):
@@ -419,6 +521,22 @@ def _finalize(conn, assignment: dict, base: dict, target: dict,
             "total_a": total_a, "received_a": received_a}
 
 
+def paper_availability(conn) -> dict[str, dict[str, tuple | None]]:
+    """每张卡在甲/乙卷下的可用性：None=可用，否则为 (问题类型, 详情)。
+
+    供核对页展示“该卷型为何不能用于这张卡”（映射缺失 / 同卡同题号冲突）。
+    """
+    m = _mapping_dict(conn)
+    out: dict[str, dict[str, tuple | None]] = {}
+    for r in conn.execute("SELECT card_no FROM cards ORDER BY card_no"):
+        card = r["card_no"]
+        out[card] = {
+            "A": _card_paper_issue(conn, card, "A", m),
+            "B": _card_paper_issue(conn, card, "B", m),
+        }
+    return out
+
+
 def current_assignment_valid(conn) -> dict:
     """用现用 assignment 复核整表（更正后判断能否继续供数）。"""
     assignment = {r["card_no"]: r["paper"] for r in conn.execute("SELECT card_no, paper FROM assignment")}
@@ -436,9 +554,12 @@ def current_assignment_valid(conn) -> dict:
     for r in conn.execute("SELECT card_no, paper FROM cards WHERE is_known=1"):
         if r["paper"] == "A":
             known_a += 1
+        issue = _card_paper_issue(conn, r["card_no"], r["paper"], m)
+        if issue is not None:
+            return {"feasible": False, "reason": _format_issue(r["card_no"], issue)}
         vec = _contrib_vector(conn, r["card_no"], r["paper"], m)
         if vec is None:
-            return {"feasible": False, "reason": f"卡 {r['card_no']} 存在无映射作答"}
+            return {"feasible": False, "reason": f"卡 {r['card_no']} 存在无映射作答或同题号冲突"}
         for cell, n in vec.items():
             base[cell] += n
     target = {(r["qid"], r["std_option"]): r["cnt"]
